@@ -49,8 +49,9 @@ env:
   BANCO_D1: DB
   # wrangler 4.160.0 (versão de `npm view wrangler version` em 2026-11-11)
   WRANGLER_VERSAO: "4.160.0"
+  # Só a configuração do usuário é anulada: apontar a global para o MESMO /dev/null faz o npm
+  # recusar ("double-loading config"). A global é a do runner (não vem do repositório).
   npm_config_userconfig: /dev/null
-  npm_config_globalconfig: /dev/null
 
 jobs:
   testar:
