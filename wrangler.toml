@@ -1,0 +1,31 @@
+name = "status-produtos"
+main = "src/worker.js"
+compatibility_date = "2026-11-01"
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[vars]
+TESTE_LIGADO = "1"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "status-produtos"
+database_id = "acf8bba2-c7b8-452a-bc64-80ed50f356f6"
+migrations_dir = "migrations"
+
+# Pré-visualização: Worker e banco próprios, nunca os de produção.
+[env.preview]
+name = "status-produtos-preview"
+
+[env.preview.triggers]
+crons = ["*/5 * * * *"]
+
+[env.preview.vars]
+TESTE_LIGADO = "1"
+
+[[env.preview.d1_databases]]
+binding = "DB"
+database_name = "status-produtos-preview"
+database_id = "348884cf-be45-425e-9bc1-c674fb82e9b2"
+migrations_dir = "migrations"

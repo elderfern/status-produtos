@@ -1,0 +1,6 @@
+[
+  { "id": "bitpersonal", "nome": "BitPersonal", "url": "https://app.bitpersonal.com.br" },
+  { "id": "vitaflow", "nome": "VitaFlow", "url": "https://vitaflow.app.br" },
+  { "id": "evolus-pdi", "nome": "Evolus PDI", "url": "https://evolus.app.br" },
+  { "id": "teste", "nome": "Teste", "url": "interno:teste" }
+]
