@@ -1,0 +1,204 @@
+# Publicação do caminho pronto "web-cloudflare" (instalado por `adlc projeto preparar`, que põe
+# o nome do projeto em PROJETO; agentes não editam .github/).
+# Só por disparo manual (`adlc intencao publicar|voltar`, pelo `gh` com o login do dono).
+# Dois jobs:
+# - `testar` (SEM segredo nem environment): roda o código do agente (npm ci, npm test) e gera o
+#   artefato `dist/` com o wrangler fixado instalado fora do repositório;
+# - `publicar` (environment = ambiente, com revisor obrigatório em `producao`): não roda nada do
+#   repositório. Lê só `wrangler.toml`, `migrations/` e `.github/adlc/` do commit, confere o
+#   `wrangler.toml`, instala o wrangler fixado fora do repositório e publica o artefato baixado.
+#   Os segredos (do ENVIRONMENT, não do repositório) entram só no `env` dos passos do wrangler.
+# `voltar` não depende do código: `testar` é pulado e `publicar` só roda `wrangler rollback`.
+# Limitação: `rollback` volta o código do Worker, não o D1 (migrações não voltam).
+name: publicar
+run-name: publicar ${{ inputs.ambiente }} ${{ inputs.acao }} ${{ inputs.corr }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "sha do commit aprovado (40 hex)"
+        required: true
+        type: string
+      ambiente:
+        description: "preview ou producao"
+        required: true
+        type: choice
+        options: [preview, producao]
+      acao:
+        description: "publicar ou voltar"
+        required: true
+        type: choice
+        options: [publicar, voltar]
+      corr:
+        description: "id de correlação da fábrica (32 hex)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publicar-${{ inputs.ambiente }}
+  cancel-in-progress: false
+
+env:
+  # Lista permitida do wrangler.toml, gerada pelo `adlc projeto preparar`.
+  PROJETO: "status-produtos"
+  # Binding do D1 em wrangler.toml (o mesmo nome em [env.preview]).
+  BANCO_D1: DB
+  # wrangler 4.160.0 (versão de `npm view wrangler version` em 2026-11-11)
+  WRANGLER_VERSAO: "4.160.0"
+  npm_config_userconfig: /dev/null
+  npm_config_globalconfig: /dev/null
+
+jobs:
+  testar:
+    if: ${{ inputs.acao == 'publicar' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Conferir as entradas
+        env:
+          REF: ${{ inputs.ref }}
+          CORR: ${{ inputs.corr }}
+        run: |
+          echo "$REF" | grep -Eq '^[0-9a-f]{40}$' || { echo "ref precisa ser um sha de 40 hex"; exit 1; }
+          echo "$CORR" | grep -Eq '^[0-9a-f]{32}$' || { echo "corr precisa ter 32 hex"; exit 1; }
+      # actions/checkout v7.0.1 (fixado por sha de commit)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Conferir o commit do checkout
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          atual="$(git rev-parse HEAD)"
+          [ "$atual" = "$REF" ] || { echo "checkout em $atual, esperado $REF"; exit 1; }
+          git merge-base --is-ancestor "$REF" origin/main || { echo "$REF não está na main"; exit 1; }
+      # actions/setup-node v7.1.0 (fixado por sha de commit)
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "24"
+      - name: Conferir o wrangler.toml
+        id: wrangler
+        run: node .github/adlc/conferir-wrangler.mjs "$PROJETO"
+      - name: Dependências (sem scripts de instalação)
+        run: |
+          if [ -f package-lock.json ]; then npm ci --ignore-scripts --no-audit --no-fund; else echo "sem package-lock.json: nada a instalar"; fi
+      - name: Testes
+        run: npm test
+      - name: Segredos
+        run: node scripts/conferir-segredos.mjs
+      - name: Instalar o wrangler fixado (fora do repositório)
+        working-directory: ${{ runner.temp }}
+        run: npm i --prefix "$RUNNER_TEMP/wrangler" "wrangler@$WRANGLER_VERSAO" --ignore-scripts --no-audit --no-fund --registry https://registry.npmjs.org/
+      - name: Build do artefato
+        env:
+          AMBIENTE: ${{ inputs.ambiente }}
+        run: |
+          rm -rf dist
+          if [ "$AMBIENTE" = "preview" ]; then
+            "$RUNNER_TEMP/wrangler/node_modules/.bin/wrangler" deploy --dry-run --outdir dist --env preview
+          else
+            "$RUNNER_TEMP/wrangler/node_modules/.bin/wrangler" deploy --dry-run --outdir dist
+          fi
+      # actions/upload-artifact v7.0.2 (fixado por sha de commit)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  publicar:
+    needs: testar
+    if: ${{ !cancelled() && (needs.testar.result == 'success' || (inputs.acao == 'voltar' && needs.testar.result == 'skipped')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: ${{ inputs.ambiente }}
+    steps:
+      - name: Conferir as entradas
+        env:
+          REF: ${{ inputs.ref }}
+          CORR: ${{ inputs.corr }}
+        run: |
+          echo "$REF" | grep -Eq '^[0-9a-f]{40}$' || { echo "ref precisa ser um sha de 40 hex"; exit 1; }
+          echo "$CORR" | grep -Eq '^[0-9a-f]{32}$' || { echo "corr precisa ter 32 hex"; exit 1; }
+      # actions/checkout v7.0.1 (fixado por sha de commit): só o que o wrangler lê, nada de código.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /wrangler.toml
+            /migrations/
+            /.github/adlc/
+      - name: Conferir o commit do checkout
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          atual="$(git rev-parse HEAD)"
+          [ "$atual" = "$REF" ] || { echo "checkout em $atual, esperado $REF"; exit 1; }
+          git merge-base --is-ancestor "$REF" origin/main || { echo "$REF não está na main"; exit 1; }
+          rm -rf node_modules .npmrc
+      # actions/setup-node v7.1.0 (fixado por sha de commit)
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "24"
+      - name: Conferir o wrangler.toml
+        id: wrangler
+        run: node .github/adlc/conferir-wrangler.mjs "$PROJETO"
+      - name: Instalar o wrangler fixado (fora do repositório)
+        working-directory: ${{ runner.temp }}
+        run: npm i --prefix "$RUNNER_TEMP/wrangler" "wrangler@$WRANGLER_VERSAO" --ignore-scripts --no-audit --no-fund --registry https://registry.npmjs.org/
+      # actions/download-artifact v8.0.2 (fixado por sha de commit)
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        if: ${{ inputs.acao == 'publicar' }}
+        with:
+          name: dist
+          path: dist
+      - name: Migrações do D1
+        if: ${{ inputs.acao == 'publicar' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          AMBIENTE: ${{ inputs.ambiente }}
+        run: |
+          if [ ! -d migrations ]; then echo "sem migrations/: nada a aplicar"; exit 0; fi
+          if [ "$AMBIENTE" = "preview" ]; then
+            "$RUNNER_TEMP/wrangler/node_modules/.bin/wrangler" d1 migrations apply "$BANCO_D1" --remote --env preview
+          else
+            "$RUNNER_TEMP/wrangler/node_modules/.bin/wrangler" d1 migrations apply "$BANCO_D1" --remote
+          fi
+      - name: Publicar o artefato
+        if: ${{ inputs.acao == 'publicar' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          AMBIENTE: ${{ inputs.ambiente }}
+          REF: ${{ inputs.ref }}
+          ENTRADA: ${{ steps.wrangler.outputs.entrada }}
+        run: |
+          if [ "$AMBIENTE" = "preview" ]; then
+            "$RUNNER_TEMP/wrangler/node_modules/.bin/wrangler" deploy "dist/$ENTRADA" --no-bundle --env preview --message "adlc $REF"
+          else
+            "$RUNNER_TEMP/wrangler/node_modules/.bin/wrangler" deploy "dist/$ENTRADA" --no-bundle --message "adlc $REF"
+          fi
+      - name: Voltar à versão anterior (o D1 não volta)
+        if: ${{ inputs.acao == 'voltar' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          AMBIENTE: ${{ inputs.ambiente }}
+          REF: ${{ inputs.ref }}
+        run: |
+          if [ "$AMBIENTE" = "preview" ]; then
+            "$RUNNER_TEMP/wrangler/node_modules/.bin/wrangler" rollback --env preview --message "adlc voltar $REF" --yes
+          else
+            "$RUNNER_TEMP/wrangler/node_modules/.bin/wrangler" rollback --message "adlc voltar $REF" --yes
+          fi

@@ -1,0 +1,48 @@
+# CI do caminho pronto "web-cloudflare" (instalado por `adlc projeto preparar`, que põe
+# o nome do projeto em PROJETO; agentes não editam .github/).
+# Portões: wrangler.toml conferido, testes, checagem de segredos e build com o wrangler fixado
+# instalado fora do repositório (`deploy --dry-run`). Sem segredo nenhum: nada vai ao ar daqui.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  PROJETO: "status-produtos"
+  # wrangler 4.160.0 (versão de `npm view wrangler version` em 2026-11-11)
+  WRANGLER_VERSAO: "4.160.0"
+  npm_config_userconfig: /dev/null
+  npm_config_globalconfig: /dev/null
+
+jobs:
+  testar:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # actions/checkout v7.0.1 (fixado por sha de commit)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # actions/setup-node v7.1.0 (fixado por sha de commit)
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "24"
+      - name: Conferir o wrangler.toml
+        run: node .github/adlc/conferir-wrangler.mjs "$PROJETO"
+      - name: Dependências (sem scripts de instalação)
+        run: |
+          if [ -f package-lock.json ]; then npm ci --ignore-scripts --no-audit --no-fund; else echo "sem package-lock.json: nada a instalar"; fi
+      - name: Testes
+        run: npm test
+      - name: Segredos
+        run: node scripts/conferir-segredos.mjs
+      - name: Instalar o wrangler fixado (fora do repositório)
+        working-directory: ${{ runner.temp }}
+        run: npm i --prefix "$RUNNER_TEMP/wrangler" "wrangler@$WRANGLER_VERSAO" --ignore-scripts --no-audit --no-fund --registry https://registry.npmjs.org/
+      - name: Build (ensaio, sem publicar)
+        run: |
+          "$RUNNER_TEMP/wrangler/node_modules/.bin/wrangler" deploy --dry-run --outdir dist
